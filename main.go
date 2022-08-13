@@ -1,13 +1,37 @@
 package main
 
 import (
+	"bytes"
+	"context"
 	"crypto/ecdsa"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io/ioutil"
 	"math/big"
+	"net"
+	"net/http"
+	"time"
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
+)
+
+var (
+	dialTimeout       = 60 * time.Second
+	httpClientTimeout = 30 * time.Minute
+	callTimeout       = 30 * time.Minute
+
+	transport = &http.Transport{
+		Dial: (&net.Dialer{
+			Timeout: dialTimeout,
+		}).Dial,
+	}
+	httpClient = &http.Client{
+		Transport: transport,
+		Timeout:   httpClientTimeout,
+	}
 )
 
 type Key struct {
@@ -31,18 +55,18 @@ func generateKey() (*Key, error) {
 
 // https://github.com/gelatodigital/relay-sdk/blob/162f6392fb23bf52ef32f4c96168bc0433a5b0c0/src/lib/index.ts#L250
 type ForwardRequest struct {
-	ChainID                     *big.Int
-	Target                      ethcommon.Address
-	FeeToken                    ethcommon.Address
-	Data                        []byte
-	PaymentType                 *big.Int
-	MaxFee                      *big.Int
-	Gas                         *big.Int
-	Nonce                       *big.Int
-	EnforceSponsorNonce         bool
-	Sponsor                     ethcommon.Address
-	SponsorChainID              *big.Int
-	EnforceSponsorNonceOrdering bool
+	ChainID                     *big.Int          `json:"chainId"`
+	Target                      ethcommon.Address `json:"target"`
+	FeeToken                    ethcommon.Address `json:"feeToken"`
+	Data                        []byte            `json:"data"`
+	PaymentType                 *big.Int          `json:"paymentType"`
+	MaxFee                      *big.Int          `json:"maxFee"`
+	Gas                         *big.Int          `json:"gas"`
+	Nonce                       *big.Int          `json:"nonce"`
+	EnforceSponsorNonce         bool              `json:"enforceSponsorNonce"`
+	Sponsor                     ethcommon.Address `json:"sponsor"`
+	SponsorChainID              *big.Int          `json:"sponsorChainId"`
+	EnforceSponsorNonceOrdering bool              `json:"enforceSponsorNonceOrdering"`
 }
 
 func padBytesLeft(in []byte, n int) []byte {
@@ -260,6 +284,76 @@ func getRelayForwarderAddress(chainID *big.Int) ethcommon.Address {
 	return ethcommon.Address{}
 }
 
+type ForwardRequestData struct {
+	TypeID           string          `json:"typeId"`
+	Request          *ForwardRequest `json:"request"`
+	SponsorSignature string          `json:"sponsorSignature"`
+}
+
+func postRPC(endpoint string, data interface{}) ([]byte, error) {
+	bz, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println(string(bz))
+
+	buf := &bytes.Buffer{}
+	_, err = buf.Write(bz)
+	if err != nil {
+		return nil, err
+	}
+
+	r, err := http.NewRequest("POST", endpoint, buf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
+	resp, err := httpClient.Do(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to post request: %w", err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	return body, nil
+
+	// var sv *Response
+	// if err = json.Unmarshal(body, &sv); err != nil {
+	// 	return nil, err
+	// }
+
+	// return sv, nil
+}
+
+func sendForwardRequest(req *ForwardRequest, sig []byte) error {
+	endpoint := "https://relay.gelato.digital" + "/metabox-relays/" + req.ChainID.String()
+	data := &ForwardRequestData{
+		TypeID:           "ForwardRequest",
+		Request:          req,
+		SponsorSignature: "0x" + hex.EncodeToString(sig),
+	}
+	resp, err := postRPC(endpoint, data)
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("resp", string(resp))
+	return nil
+
+}
+
 func main() {
 	// generate wallet
 	key, err := generateKey()
@@ -303,4 +397,14 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(digest)
+
+	sig, err := crypto.Sign(digest[:], key.priv)
+	if err != nil {
+		panic(err)
+	}
+
+	err = sendForwardRequest(req, sig)
+	if err != nil {
+		panic(err)
+	}
 }
