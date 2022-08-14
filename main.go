@@ -19,6 +19,7 @@ import (
 )
 
 var (
+	contentTypeJSON   = "application/json"
 	dialTimeout       = 60 * time.Second
 	httpClientTimeout = 30 * time.Minute
 	callTimeout       = 30 * time.Minute
@@ -89,31 +90,33 @@ func getEIP712DomainSeparator(name, version []byte, chainID *big.Int, address et
 		return [32]byte{}, fmt.Errorf("failed to create address type: %w", err)
 	}
 
-	bytesTy, err := abi.NewType("bytes", "", nil)
-	if err != nil {
-		return [32]byte{}, fmt.Errorf("failed to create bytes type: %w", err)
-	}
+	// bytesTy, err := abi.NewType("bytes", "", nil)
+	// if err != nil {
+	// 	return [32]byte{}, fmt.Errorf("failed to create bytes type: %w", err)
+	// }
 
-	args := &abi.Arguments{
-		{
-			Type: bytesTy,
-		},
-	}
+	// args := &abi.Arguments{
+	// 	{
+	// 		Type: bytesTy,
+	// 	},
+	// }
+	// eip712Domain, err := args.Pack(
+	// 	[]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
+	// )
+	// if err != nil {
+	// 	return [32]byte{}, err
+	// }
 
-	eip712Domain, err := args.Pack(
-		[]byte("EIP712Domain(string name,string version,uint256 chainId,address verifyingContract)"),
-	)
-	if err != nil {
-		return [32]byte{}, err
-	}
+	// eip712DomainHash := crypto.Keccak256Hash(eip712Domain)
 
-	fmt.Printf("eip712Domain: %x\n", eip712Domain)
-	eip712DomainHash := crypto.Keccak256Hash(eip712Domain)
+	// idk just hardcode this for now, i think the "bytes" type in the abi is causing a mismatch
+	eip712DomainHash := ethcommon.HexToHash("0x8b73c3c69bb8fe3d512ecc4cf759cc79239f7b179b0ffacaa9a75d522b39400f")
+	fmt.Println("eip712DomainHash", eip712DomainHash)
 
 	var chainIDArr [32]byte
 	copy(chainIDArr[:], padBytesLeft(chainID.Bytes(), 32))
 
-	args = &abi.Arguments{
+	args := &abi.Arguments{
 		{
 			Type: bytes32Ty,
 		},
@@ -181,6 +184,7 @@ func getForwardRequestDigestToSign(req *ForwardRequest) ([32]byte, error) {
 	// idk maybe not right cause it's string
 	// https://github.com/gelatodigital/relay-sdk/blob/8a9b9b2d0ef92ea9a3d6d64a230d9467a4b4da6d/src/constants/index.ts#L14
 	ForwardRequestTypehash := crypto.Keccak256Hash([]byte("ForwardRequest(uint256 chainId,address target,bytes data,address feeToken,uint256 paymentType,uint256 maxFee,uint256 gas,address sponsor,uint256 sponsorChainId,uint256 nonce,bool enforceSponsorNonce,bool enforceSponsorNonceOrdering)"))
+	fmt.Println("ForwardRequestTypehash", ForwardRequestTypehash)
 
 	args := &abi.Arguments{
 		{
@@ -285,9 +289,20 @@ func getRelayForwarderAddress(chainID *big.Int) ethcommon.Address {
 }
 
 type ForwardRequestData struct {
-	TypeID           string          `json:"typeId"`
-	Request          *ForwardRequest `json:"request"`
-	SponsorSignature string          `json:"sponsorSignature"`
+	TypeID                      string            `json:"typeId"`
+	ChainID                     *big.Int          `json:"chainId"`
+	Target                      ethcommon.Address `json:"target"`
+	FeeToken                    ethcommon.Address `json:"feeToken"`
+	Data                        string            `json:"data"`
+	PaymentType                 *big.Int          `json:"paymentType"`
+	MaxFee                      string            `json:"maxFee"`
+	Gas                         string            `json:"gas"`
+	Nonce                       *big.Int          `json:"nonce"`
+	EnforceSponsorNonce         bool              `json:"enforceSponsorNonce"`
+	Sponsor                     ethcommon.Address `json:"sponsor"`
+	SponsorChainID              *big.Int          `json:"sponsorChainId"`
+	EnforceSponsorNonceOrdering bool              `json:"enforceSponsorNonceOrdering"`
+	SponsorSignature            string            `json:"sponsorSignature"`
 }
 
 func postRPC(endpoint string, data interface{}) ([]byte, error) {
@@ -296,18 +311,19 @@ func postRPC(endpoint string, data interface{}) ([]byte, error) {
 		return nil, err
 	}
 
-	fmt.Println(string(bz))
-
 	buf := &bytes.Buffer{}
 	_, err = buf.Write(bz)
 	if err != nil {
 		return nil, err
 	}
 
+	fmt.Println("req", string(bz))
+
 	r, err := http.NewRequest("POST", endpoint, buf)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
+	r.Header.Set("Content-Type", contentTypeJSON)
 
 	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
@@ -339,10 +355,22 @@ func postRPC(endpoint string, data interface{}) ([]byte, error) {
 
 func sendForwardRequest(req *ForwardRequest, sig []byte) error {
 	endpoint := "https://relay.gelato.digital" + "/metabox-relays/" + req.ChainID.String()
+	fmt.Println("data", req.Data)
 	data := &ForwardRequestData{
-		TypeID:           "ForwardRequest",
-		Request:          req,
-		SponsorSignature: "0x" + hex.EncodeToString(sig),
+		TypeID:                      "ForwardRequest",
+		ChainID:                     req.ChainID,
+		Target:                      req.Target,
+		FeeToken:                    req.FeeToken,
+		Data:                        "0x" + hex.EncodeToString(req.Data),
+		PaymentType:                 req.PaymentType,
+		MaxFee:                      req.MaxFee.String(),
+		Gas:                         req.Gas.String(),
+		Nonce:                       req.Nonce,
+		EnforceSponsorNonce:         req.EnforceSponsorNonce,
+		Sponsor:                     req.Sponsor,
+		SponsorChainID:              req.SponsorChainID,
+		EnforceSponsorNonceOrdering: req.EnforceSponsorNonceOrdering,
+		SponsorSignature:            "0x" + hex.EncodeToString(sig),
 	}
 	resp, err := postRPC(endpoint, data)
 	if err != nil {
@@ -368,13 +396,16 @@ func main() {
 		// goerli
 		chainID        = big.NewInt(5)
 		targetContract = ethcommon.HexToAddress("0x8580995EB790a3002A55d249e92A8B6e5d0b384a")
-		calldata       = ethcommon.Hex2Bytes("0x4b327067000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeaeeeeeeeeeeeeeeeee")
 		nativeToken    = ethcommon.HexToAddress("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE")
 		paymentType    = big.NewInt(1)
 		maxFee         = big.NewInt(1000000000000000) // wei
 		gas            = big.NewInt(200000)
 		nonce          = big.NewInt(0)
 	)
+	calldata, err := hex.DecodeString("4b327067000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeaeeeeeeeeeeeeeeeee")
+	if err != nil {
+		panic(err)
+	}
 
 	req := &ForwardRequest{
 		ChainID:                     chainID,
@@ -391,12 +422,10 @@ func main() {
 		EnforceSponsorNonceOrdering: false,
 	}
 
-	fmt.Println(req)
 	digest, err := getForwardRequestDigestToSign(req)
 	if err != nil {
 		panic(err)
 	}
-	fmt.Println(digest)
 
 	sig, err := crypto.Sign(digest[:], key.priv)
 	if err != nil {
