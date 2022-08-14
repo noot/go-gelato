@@ -54,11 +54,29 @@ func generateKey() (*Key, error) {
 	}, nil
 }
 
+func newKeyFromPrivateKey(pk string) (*Key, error) {
+	pkBytes, err := hex.DecodeString(pk)
+	if err != nil {
+		return nil, err
+	}
+
+	priv, err := crypto.ToECDSA(pkBytes)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Key{
+		priv:    priv,
+		pub:     priv.PublicKey,
+		address: crypto.PubkeyToAddress(priv.PublicKey),
+	}, nil
+}
+
 // https://github.com/gelatodigital/relay-sdk/blob/162f6392fb23bf52ef32f4c96168bc0433a5b0c0/src/lib/index.ts#L250
 type ForwardRequest struct {
 	ChainID                     *big.Int          `json:"chainId"`
 	Target                      ethcommon.Address `json:"target"`
-	FeeToken                    ethcommon.Address `json:"feeToken"`
+	FeeToken                    string            `json:"feeToken"`
 	Data                        []byte            `json:"data"`
 	PaymentType                 *big.Int          `json:"paymentType"`
 	MaxFee                      *big.Int          `json:"maxFee"`
@@ -89,6 +107,8 @@ func getEIP712DomainSeparator(name, version []byte, chainID *big.Int, address et
 	if err != nil {
 		return [32]byte{}, fmt.Errorf("failed to create address type: %w", err)
 	}
+
+	// probably just straight up hashing the string will work
 
 	// bytesTy, err := abi.NewType("bytes", "", nil)
 	// if err != nil {
@@ -186,6 +206,9 @@ func getForwardRequestDigestToSign(req *ForwardRequest) ([32]byte, error) {
 	ForwardRequestTypehash := crypto.Keccak256Hash([]byte("ForwardRequest(uint256 chainId,address target,bytes data,address feeToken,uint256 paymentType,uint256 maxFee,uint256 gas,address sponsor,uint256 sponsorChainId,uint256 nonce,bool enforceSponsorNonce,bool enforceSponsorNonceOrdering)"))
 	fmt.Println("ForwardRequestTypehash", ForwardRequestTypehash)
 
+	hashedData := crypto.Keccak256Hash(req.Data)
+	fmt.Printf("hashedData %x\n", hashedData)
+
 	args := &abi.Arguments{
 		{
 			Type: bytes32Ty,
@@ -231,8 +254,8 @@ func getForwardRequestDigestToSign(req *ForwardRequest) ([32]byte, error) {
 		ForwardRequestTypehash,
 		req.ChainID,
 		req.Target,
-		crypto.Keccak256Hash(req.Data),
-		req.FeeToken,
+		hashedData,
+		ethcommon.HexToAddress(req.FeeToken),
 		req.PaymentType,
 		req.MaxFee,
 		req.Gas,
@@ -246,11 +269,22 @@ func getForwardRequestDigestToSign(req *ForwardRequest) ([32]byte, error) {
 		return [32]byte{}, err
 	}
 
+	fmt.Printf("hashPreimage %x\n", hashPreimage)
 	hash := crypto.Keccak256Hash(hashPreimage)
+	fmt.Printf("hash %x\n", hash)
 
-	// wtf is this https://github.com/gelatodigital/relay-sdk/blob/162f6392fb23bf52ef32f4c96168bc0433a5b0c0/src/lib/index.ts#L337
-	const prefix = "0x1901"
-	return crypto.Keccak256Hash(append(append(ethcommon.Hex2Bytes(prefix), domainSeparator[:]...), hash[:]...)), nil
+	// wtf is this
+	// https://github.com/gelatodigital/relay-sdk/blob/162f6392fb23bf52ef32f4c96168bc0433a5b0c0/src/lib/index.ts#L337
+	prefix, err := hex.DecodeString("1901")
+	if err != nil {
+		return [32]byte{}, err
+	}
+
+	digestPreimage := append(append(prefix, domainSeparator[:]...), hash[:]...)
+	fmt.Printf("digestPreimage %x\n", digestPreimage)
+	digest, err := crypto.Keccak256Hash(digestPreimage), nil
+	fmt.Printf("digest %x\n", digest)
+	return digest, err
 }
 
 func getRelayForwarderAddress(chainID *big.Int) ethcommon.Address {
@@ -292,7 +326,7 @@ type ForwardRequestData struct {
 	TypeID                      string            `json:"typeId"`
 	ChainID                     *big.Int          `json:"chainId"`
 	Target                      ethcommon.Address `json:"target"`
-	FeeToken                    ethcommon.Address `json:"feeToken"`
+	FeeToken                    string            `json:"feeToken"`
 	Data                        string            `json:"data"`
 	PaymentType                 *big.Int          `json:"paymentType"`
 	MaxFee                      string            `json:"maxFee"`
@@ -384,7 +418,12 @@ func sendForwardRequest(req *ForwardRequest, sig []byte) error {
 
 func main() {
 	// generate wallet
-	key, err := generateKey()
+	// key, err := generateKey()
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	key, err := newKeyFromPrivateKey("95e2d44f3846237e780b374af6e42a1ecee0ff1a6c529fd38e1a6a2c73c83966")
 	if err != nil {
 		panic(err)
 	}
@@ -396,9 +435,9 @@ func main() {
 		// goerli
 		chainID        = big.NewInt(5)
 		targetContract = ethcommon.HexToAddress("0x8580995EB790a3002A55d249e92A8B6e5d0b384a")
-		nativeToken    = ethcommon.HexToAddress("0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE")
+		nativeToken    = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 		paymentType    = big.NewInt(1)
-		maxFee         = big.NewInt(1000000000000000) // wei
+		maxFee         = big.NewInt(1000000000000000000) // wei
 		gas            = big.NewInt(200000)
 		nonce          = big.NewInt(0)
 	)
@@ -419,7 +458,7 @@ func main() {
 		SponsorChainID:              chainID,
 		Nonce:                       nonce,
 		EnforceSponsorNonce:         false,
-		EnforceSponsorNonceOrdering: false,
+		EnforceSponsorNonceOrdering: true,
 	}
 
 	digest, err := getForwardRequestDigestToSign(req)
@@ -431,6 +470,9 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
+
+	// eth wants 27/28
+	sig[64] += 27
 
 	err = sendForwardRequest(req, sig)
 	if err != nil {
