@@ -10,6 +10,7 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 )
 
+// this example is equivalent to https://docs.gelato.network/developer-products/gelato-relay-sdk/quick-start
 func main() {
 	// generate new random keypair
 	key, err := gelato.GenerateKey()
