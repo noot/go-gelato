@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/hex"
 	"fmt"
 	"math/big"
 
 	"github.com/noot/go-gelato"
 
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	ethcommon "github.com/ethereum/go-ethereum/common"
 )
 
@@ -22,7 +22,8 @@ func main() {
 
 	// build request
 	var (
-		chainID        = big.NewInt(5) // goerli
+		chainID = big.NewInt(5) // goerli
+		// https://goerli.etherscan.io/address/0x8580995EB790a3002A55d249e92A8B6e5d0b384a#code
 		targetContract = ethcommon.HexToAddress("0x8580995EB790a3002A55d249e92A8B6e5d0b384a")
 		nativeToken    = "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE"
 		paymentType    = big.NewInt(1)
@@ -31,16 +32,30 @@ func main() {
 		nonce          = big.NewInt(0)
 	)
 
-	// TODO: generate this from function signature
-	calldata, err := hex.DecodeString("4b327067000000000000000000000000eeeeeeeeeeeeeeeeeeeeeeeeaeeeeeeeeeeeeeeeee")
+	// encode transaction data
+	functionSig := gelato.GetFunctionSignature("sayHiVanilla(address)")
+
+	addressTy, err := abi.NewType("address", "", nil)
 	if err != nil {
 		panic(err)
 	}
 
+	args := &abi.Arguments{
+		{
+			Type: addressTy,
+		},
+	}
+	calldata, err := args.Pack(ethcommon.HexToAddress(nativeToken))
+	if err != nil {
+		panic(err)
+	}
+
+	data := append(functionSig, calldata...)
+
 	req := &gelato.ForwardRequest{
 		ChainID:                     chainID,
 		Target:                      targetContract,
-		Data:                        calldata,
+		Data:                        data,
 		FeeToken:                    nativeToken,
 		PaymentType:                 paymentType,
 		MaxFee:                      maxFee,
@@ -52,11 +67,13 @@ func main() {
 		EnforceSponsorNonceOrdering: true,
 	}
 
+	// get digest to sign
 	digest, err := gelato.GetForwardRequestDigestToSign(req)
 	if err != nil {
 		panic(err)
 	}
 
+	// sign and send
 	sig, err := key.Sign(digest)
 	if err != nil {
 		panic(err)

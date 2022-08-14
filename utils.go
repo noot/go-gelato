@@ -23,6 +23,12 @@ func padBytesLeft(in []byte, n int) []byte {
 	return append(out, in...)
 }
 
+// GetFunctionSignature returns the 4-byte function signature of a Solidity function.
+func GetFunctionSignature(fn string) []byte {
+	hash := crypto.Keccak256Hash([]byte(fn))
+	return hash[:4]
+}
+
 func getEIP712DomainSeparator(name, version []byte, chainID *big.Int, address ethcommon.Address) ([32]byte, error) {
 	bytes32Ty, err := abi.NewType("bytes32", "", nil)
 	if err != nil {
