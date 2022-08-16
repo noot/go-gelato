@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"math/big"
+	"time"
 
 	"github.com/noot/go-gelato"
 
@@ -86,4 +87,14 @@ func main() {
 
 	fmt.Println("request submitted successfully!")
 	fmt.Println("taskId:", resp.TaskID)
+
+	for {
+		res, err := gelato.GetStatus(resp.TaskID)
+		if err != nil {
+			panic(err)
+		}
+
+		fmt.Println(res)
+		time.Sleep(time.Second * 5)
+	}
 }

@@ -28,12 +28,12 @@ var (
 	}
 )
 
-// Response is returned from a Gelato relayer
-type Response struct {
+// PostResponse is returned from a Gelato relayer after POSTing a request
+type PostResponse struct {
 	TaskID string `json"taskId"`
 }
 
-func postRPC(endpoint string, data interface{}) (*Response, error) {
+func postRPC(endpoint string, data interface{}) (*PostResponse, error) {
 	bz, err := json.Marshal(data)
 	if err != nil {
 		return nil, err
@@ -69,10 +69,48 @@ func postRPC(endpoint string, data interface{}) (*Response, error) {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	var sv *Response
-	if err = json.Unmarshal(body, &sv); err != nil {
+	var pr *PostResponse
+	if err = json.Unmarshal(body, &pr); err != nil {
 		return nil, err
 	}
 
-	return sv, nil
+	return pr, nil
+}
+
+// TODO: update this type https://docs.gelato.network/developer-products/gelato-relay-sdk/request-types#querying-task-status
+type GetResponse struct {
+	Message string `json:"message"`
+}
+
+func getRPC(endpoint string) (*GetResponse, error) {
+	r, err := http.NewRequest("GET", endpoint, nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+	r.Header.Set("Content-Type", contentTypeJSON)
+
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+	defer cancel()
+	r = r.WithContext(ctx)
+
+	resp, err := httpClient.Do(r)
+	if err != nil {
+		return nil, fmt.Errorf("failed to post request: %w", err)
+	}
+
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response body: %w", err)
+	}
+
+	var gr *GetResponse
+	if err = json.Unmarshal(body, &gr); err != nil {
+		return nil, err
+	}
+
+	return gr, nil
 }
